@@ -3,7 +3,7 @@ use std::error::Error;
 use std::process;
 use std::str;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Interface {
     pub index: i32,
     pub name: String,
@@ -13,6 +13,7 @@ pub struct Interface {
 
 pub struct VolumeControl {
     interfaces: Vec<Interface>,
+    pub active_interface: Option<Interface>,
 }
 
 fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
@@ -68,21 +69,23 @@ fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
     Ok(all_interfaces)
 }
 
+pub fn get_active_interface(interfaces: &Vec<Interface>) -> Option<Interface> {
+    for interface in interfaces {
+        if interface.active {
+            return Some(interface.clone());
+        }
+    }
+    None
+}
+
 impl VolumeControl {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let interfaces = get_current_audio_outputs()?;
+        let active_interface = get_active_interface(&interfaces);
         Ok(Self {
             interfaces: interfaces,
+            active_interface: active_interface,
         })
-    }
-
-    pub fn get_active_interface(&self) -> Option<&Interface> {
-        for interface in &self.interfaces {
-            if interface.active {
-                return Some(&interface);
-            }
-        }
-        None
     }
 
     pub fn change_volume(&self, amount: i32) -> Result<(), Box<dyn Error>> {
@@ -107,7 +110,7 @@ impl VolumeControl {
     pub fn toggle_mute(&mut self) -> Result<(), Box<dyn Error>> {
         self.interfaces = get_current_audio_outputs()?;
 
-        if let Some(active_interface) = self.get_active_interface() {
+        if let Some(active_interface) = &self.active_interface {
             process::Command::new("pactl")
                 .args(&[
                     "set-sink-mute",
@@ -122,6 +125,7 @@ impl VolumeControl {
 
     pub fn get_available_interfaces(&mut self) -> Result<&Vec<Interface>, Box<dyn Error>> {
         self.interfaces = get_current_audio_outputs()?;
+        self.active_interface = get_active_interface(&self.interfaces);
         Ok(&self.interfaces)
     }
 

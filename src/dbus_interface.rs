@@ -3,11 +3,85 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use dbus::blocking::LocalConnection;
-use dbus::tree::{Factory, MTFnMut, MethodInfo};
+use dbus::tree::{Factory, MTFnMut, MethodInfo, MethodResult};
 
 use crate::notification::{play_sound_if_not_used, SinkNotificaton, VolumeNotification};
 use crate::volume::VolumeInfo;
 use crate::volume_control::VolumeControl;
+
+struct DbusInterface {
+    volume_control: VolumeControl,
+    volume_notification: VolumeNotification,
+    sink_notification: SinkNotificaton,
+}
+
+impl DbusInterface {
+    fn new() -> Self {
+        DbusInterface {
+            volume_control: VolumeControl::new().expect("Failed to create volume notification."),
+            volume_notification: VolumeNotification::new(),
+            sink_notification: SinkNotificaton::new(),
+        }
+    }
+
+    pub fn show_volume_notification(&mut self) {
+        match VolumeInfo::get_volume() {
+            Err(e) => eprintln!("Failed to get volume status: {}", e),
+            Ok(volume) => {
+                self.volume_notification
+                    .notify(&volume)
+                    .unwrap_or_else(|e| eprintln!("Failed to notify: {}", e));
+            }
+        }
+        self.play_sound_if_not_used();
+    }
+
+    fn play_sound_if_not_used(&mut self) {
+        if let Some(active_interface) = &self.volume_control.active_interface {
+            if let Err(e) = play_sound_if_not_used(&active_interface) {
+                eprintln!("Failed to play sound: {}", e);
+            }
+        }
+    }
+
+    pub fn change_volume(&mut self, m: &MethodInfo<'_, MTFnMut, ()>, amount: i32) -> MethodResult {
+        self.volume_control
+            .change_volume(amount)
+            .unwrap_or_else(|e| eprintln!("Failed to change volume: {}", e));
+        self.show_volume_notification();
+        Ok(vec![m.msg.method_return()])
+    }
+
+    pub fn toggle_mute(&mut self, m: &MethodInfo<'_, MTFnMut, ()>) -> MethodResult {
+        self.volume_control
+            .toggle_mute()
+            .unwrap_or_else(|e| eprintln!("Failed to toggle mute: {}", e));
+        self.show_volume_notification();
+
+        Ok(vec![m.msg.method_return()])
+    }
+
+    pub fn cycle_through_interfaces(&mut self, m: &MethodInfo<'_, MTFnMut, ()>) -> MethodResult {
+        self.sink_notification
+            .notify_start()
+            .unwrap_or_else(|e| eprintln!("Failed to send the notification: {}", e));
+        match self.volume_control.cycle_through_interfaces() {
+            Err(e) => eprintln!("Failed to change input: {}", e),
+            Ok(_) => {
+                let available_inputs = self.volume_control.get_available_interfaces();
+                match available_inputs {
+                    Ok(list) => self
+                        .sink_notification
+                        .notify(list)
+                        .unwrap_or_else(|e| eprintln!("Failed to notify: {}", e)),
+                    Err(e) => eprintln!("Failed to list available inputs: {}", e),
+                }
+            }
+        };
+        self.play_sound_if_not_used();
+        Ok(vec![m.msg.method_return()])
+    }
+}
 
 pub fn run() {
     let mut dbus_connection = LocalConnection::new_session().expect("Couldn't connect to dbus.");
@@ -17,108 +91,31 @@ pub fn run() {
 
     let f = Factory::new_fnmut::<()>();
 
-    let volume_notification = RefCell::new(VolumeNotification::new());
-    let volume_control = Rc::new(RefCell::new(
-        VolumeControl::new().expect("Failed to create volume notification."),
-    ));
-    let sink_notification = RefCell::new(SinkNotificaton::new());
+    let interface = Rc::new(RefCell::new(DbusInterface::new()));
 
-    let play_sound_if_not_used_closure = Rc::new(move |volume_control: &VolumeControl| {
-        if let Some(active_interface) = volume_control.get_active_interface() {
-            if let Err(e) = play_sound_if_not_used(active_interface) {
-                eprintln!("Failed to play sound: {}", e);
-            }
-        }
-    });
-
-    let volume_control_copy = Rc::clone(&volume_control);
-    let play_sound_if_not_used_closure_copy = Rc::clone(&play_sound_if_not_used_closure);
-    let notify_callback_base = Rc::new(move |m: &MethodInfo<'_, MTFnMut, ()>| {
-        let mut notification = volume_notification.borrow_mut();
-        match VolumeInfo::get_volume() {
-            Err(e) => eprintln!("Failed to get volume status: {}", e),
-            Ok(volume) => {
-                notification
-                    .notify(&volume)
-                    .unwrap_or_else(|e| eprintln!("Failed to notify: {}", e));
-            }
-        }
-
-        play_sound_if_not_used_closure_copy(&volume_control_copy.borrow());
-
-        let mret = m.msg.method_return();
-        Ok(vec![mret])
-    });
-
-    let notification_callback_copy = Rc::clone(&notify_callback_base);
-    let notify_callback = move |m: &MethodInfo<'_, MTFnMut, ()>| notification_callback_copy(m);
-
-    let volume_control_copy = Rc::clone(&volume_control);
-    let volume_change_callback_base = Rc::new(move |amount| {
-        if let Err(e) = volume_control_copy.borrow_mut().change_volume(amount) {
-            eprintln!("Failed to change volume: {}", e);
-        }
-    });
-
-    let notification_callback_copy = Rc::clone(&notify_callback_base);
-    let volume_change_callback_base_copy = Rc::clone(&volume_change_callback_base);
-    let raise_callback = move |m: &MethodInfo<'_, MTFnMut, ()>| {
-        volume_change_callback_base_copy(5);
-        notification_callback_copy(m)
-    };
-
-    let notification_callback_copy = Rc::clone(&notify_callback_base);
-    let volume_change_callback_base_copy = Rc::clone(&volume_change_callback_base);
-    let lower_callback = move |m: &MethodInfo<'_, MTFnMut, ()>| {
-        volume_change_callback_base_copy(-5);
-        notification_callback_copy(m)
-    };
-
-    let notification_callback_copy = Rc::clone(&notify_callback_base);
-    let volume_control_copy = Rc::clone(&volume_control);
-    let mute_callback = move |m: &MethodInfo<'_, MTFnMut, ()>| {
-        volume_control_copy
-            .borrow_mut()
-            .toggle_mute()
-            .unwrap_or_else(|e| eprintln!("Failed to toggle mute: {}", e));
-        notification_callback_copy(m)
-    };
-
-    let cycle_interface_callback = move |m: &MethodInfo<'_, MTFnMut, ()>| {
-        let mret = m.msg.method_return();
-        if let Err(e) = sink_notification.borrow_mut().notify_start() {
-            eprintln!("Failed to send the notification: {}", e);
-        }
-        let mut volume_control = volume_control.borrow_mut();
-        if let Err(e) = volume_control.cycle_through_interfaces() {
-            eprintln!("Failed to change input: {}", e);
-        } else {
-            let available_inputs = volume_control.get_available_interfaces();
-            match available_inputs {
-                Ok(list) => {
-                    if let Err(e) = sink_notification.borrow_mut().notify(list) {
-                        eprintln!("Failed to notify: {}", e);
-                    }
-                }
-                Err(e) => eprintln!("Failed to list available inputs: {}", e),
-            }
-        }
-
-        play_sound_if_not_used_closure(&volume_control);
-
-        Ok(vec![mret])
-    };
+    // Make a few copies to pass the callbacks.
+    let interface_lower = Rc::clone(&interface);
+    let interface_raise = Rc::clone(&interface);
+    let interface_mute = Rc::clone(&interface);
+    let interface_cycle = Rc::clone(&interface);
 
     let tree = f
         .tree(())
         .add(
             f.object_path("/volume_control", ()).introspectable().add(
                 f.interface("ch.eggerk.volume_notification", ())
-                    .add_m(f.method("VolumeNotify", (), notify_callback))
-                    .add_m(f.method("VolumeRaise", (), raise_callback))
-                    .add_m(f.method("VolumeLower", (), lower_callback))
-                    .add_m(f.method("VolumeToggleMute", (), mute_callback))
-                    .add_m(f.method("CycleInputs", (), cycle_interface_callback)),
+                    .add_m(f.method("VolumeRaise", (), move |m| {
+                        interface_raise.borrow_mut().change_volume(m, 5)
+                    }))
+                    .add_m(f.method("VolumeLower", (), move |m| {
+                        interface_lower.borrow_mut().change_volume(m, -5)
+                    }))
+                    .add_m(f.method("VolumeToggleMute", (), move |m| {
+                        interface_mute.borrow_mut().toggle_mute(m)
+                    }))
+                    .add_m(f.method("CycleInputs", (), move |m| {
+                        interface_cycle.borrow_mut().cycle_through_interfaces(m)
+                    })),
             ),
         )
         .add(f.object_path("/", ()).introspectable());
