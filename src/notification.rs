@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::process;
 use std::str;
+use std::sync::{Arc, Mutex};
+use std::thread::{spawn, JoinHandle};
 
 use notify_rust::{Notification, NotificationHandle};
 
@@ -115,15 +117,46 @@ impl SinkNotificaton {
     }
 }
 
-pub fn play_sound_if_not_used(interface: &Interface) -> Result<(), Box<dyn Error>> {
-    if interface.state != "RUNNING" {
-        process::Command::new("paplay")
-            .args(&[
-                "-d",
-                &interface.index.to_string(),
-                "/usr/share/sounds/freedesktop/stereo/message.oga",
-            ])
-            .output()?;
+pub struct SoundPlayer {
+    thread: Option<JoinHandle<()>>,
+    thread_running: Arc<Mutex<bool>>,
+}
+
+impl SoundPlayer {
+    pub fn new() -> Self {
+        SoundPlayer {
+            thread: None,
+            thread_running: Arc::new(Mutex::new(false)),
+        }
     }
-    Ok(())
+
+    pub fn play_sound_if_not_used(&mut self, interface: &Interface) {
+        if interface.state != "RUNNING" {
+            let index = interface.index.to_string();
+            if let Ok(thread_running) = self.thread_running.lock() {
+                if *thread_running {
+                    return;
+                }
+            }
+            let thread_running_copy = self.thread_running.clone();
+            self.thread = Some(spawn(move || {
+                if let Err(e) = process::Command::new("paplay")
+                    .args(&[
+                        "-d",
+                        &index,
+                        "/usr/share/sounds/freedesktop/stereo/message.oga",
+                    ])
+                    .output()
+                {
+                    eprintln!("Failed to play sound: {}", e);
+                }
+                if let Ok(mut thread_running) = thread_running_copy.lock() {
+                    *thread_running = false;
+                }
+            }));
+            if let Ok(mut thread_running) = self.thread_running.lock() {
+                *thread_running = true;
+            }
+        }
+    }
 }

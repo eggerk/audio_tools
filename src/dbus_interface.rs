@@ -5,7 +5,7 @@ use std::time::Duration;
 use dbus::blocking::LocalConnection;
 use dbus::tree::{Factory, MTFnMut, MethodInfo, MethodResult};
 
-use crate::notification::{play_sound_if_not_used, SinkNotificaton, VolumeNotification};
+use crate::notification::{SinkNotificaton, SoundPlayer, VolumeNotification};
 use crate::volume::VolumeInfo;
 use crate::volume_control::VolumeControl;
 
@@ -13,6 +13,7 @@ struct DbusInterface {
     volume_control: VolumeControl,
     volume_notification: VolumeNotification,
     sink_notification: SinkNotificaton,
+    sound_player: SoundPlayer,
 }
 
 impl DbusInterface {
@@ -21,6 +22,7 @@ impl DbusInterface {
             volume_control: VolumeControl::new().expect("Failed to create volume notification."),
             volume_notification: VolumeNotification::new(),
             sink_notification: SinkNotificaton::new(),
+            sound_player: SoundPlayer::new(),
         }
     }
 
@@ -37,10 +39,12 @@ impl DbusInterface {
     }
 
     fn play_sound_if_not_used(&mut self) {
+        match VolumeControl::new() {
+            Ok(vol) => self.volume_control = vol,
+            Err(e) => eprintln!("Failed to get volume info: {}", e),
+        }
         if let Some(active_interface) = &self.volume_control.active_interface {
-            if let Err(e) = play_sound_if_not_used(&active_interface) {
-                eprintln!("Failed to play sound: {}", e);
-            }
+            self.sound_player.play_sound_if_not_used(&active_interface);
         }
     }
 
