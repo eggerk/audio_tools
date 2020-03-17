@@ -10,6 +10,8 @@ edition = "2018"
 regex = "1.3"
 notify-rust = "3.6"
 dbus = "0.8"
+log = "0.4"
+simplelog = "^0.7"
 
 # Need newer Ubuntu for those.
 # libpulse-binding = "0.1"

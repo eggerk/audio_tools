@@ -4,6 +4,7 @@ use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread::{spawn, JoinHandle};
 
+use log::{debug, error, info};
 use notify_rust::{Notification, NotificationHandle};
 
 use crate::volume::VolumeInfo;
@@ -24,15 +25,24 @@ impl NotificationWrapper {
 
     fn notify(&mut self, summary: Option<&str>, body: &str) -> Result<(), Box<dyn Error>> {
         if let None = self.notification_handle {
+            info!(
+                "Created notification \"{}\".",
+                match summary {
+                    Some(s) => s,
+                    None => "<no summary>",
+                }
+            );
             let notification = Notification::new().icon("audio-headphones").show()?;
             self.notification_handle = Some(notification);
         }
 
         if let Some(notification_handle) = &mut self.notification_handle {
-            notification_handle.summary(match summary {
+            let summary = match summary {
                 Some(s) => s,
                 None => &self.default_summary,
-            });
+            };
+            debug!("Showing notification \"{}\".", summary);
+            notification_handle.summary(summary);
             notification_handle.body(&body);
             notification_handle.update();
         }
@@ -79,6 +89,10 @@ impl VolumeNotification {
     }
 
     pub fn notify(&mut self, volume_info: &VolumeInfo) -> Result<(), Box<dyn Error>> {
+        debug!(
+            "Showing volumen notification ({}%, muted: {}).",
+            volume_info.volume, volume_info.muted
+        );
         let (title, body) = VolumeNotification::build_volume_string(&volume_info);
 
         self.notification_handle.notify(Some(&title), &body)
@@ -97,10 +111,12 @@ impl SinkNotificaton {
     }
 
     pub fn notify_start(&mut self) -> Result<(), Box<dyn Error>> {
+        debug!("Notifying about sink change start.");
         self.notification_handle.notify(None, "Changing input...")
     }
 
     pub fn notify(&mut self, interfaces: &Vec<Interface>) -> Result<(), Box<dyn Error>> {
+        debug!("Showing sink notification.");
         let body = interfaces
             .iter()
             .map(|i| {
@@ -131,15 +147,20 @@ impl SoundPlayer {
     }
 
     pub fn play_sound_if_not_used(&mut self, interface: &Interface) {
+        debug!("Request to play sound. Interface state: {}", interface.state);
         if interface.state != "RUNNING" {
+            debug!("Interface is NOT running. Playing a sound.");
             let index = interface.index.to_string();
             if let Ok(thread_running) = self.thread_running.lock() {
                 if *thread_running {
+                    debug!("A sound is already playing -- aborting.");
                     return;
                 }
             }
+
             let thread_running_copy = self.thread_running.clone();
             self.thread = Some(spawn(move || {
+                debug!("Playing sound now.");
                 if let Err(e) = process::Command::new("paplay")
                     .args(&[
                         "-d",
@@ -148,12 +169,14 @@ impl SoundPlayer {
                     ])
                     .output()
                 {
-                    eprintln!("Failed to play sound: {}", e);
+                    error!("Failed to play sound: {}", e);
                 }
+
                 if let Ok(mut thread_running) = thread_running_copy.lock() {
                     *thread_running = false;
                 }
             }));
+
             if let Ok(mut thread_running) = self.thread_running.lock() {
                 *thread_running = true;
             }

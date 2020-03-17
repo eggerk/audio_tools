@@ -3,12 +3,14 @@ use std::error::Error;
 use std::process;
 use std::str;
 
+use log::{debug, error};
+
 #[derive(Clone, Debug)]
 pub struct Interface {
     pub index: i32,
-    pub name: String,
     pub active: bool,
     pub state: String,
+    pub name: String,
 }
 
 pub struct VolumeControl {
@@ -25,12 +27,14 @@ fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
     let mut all_interfaces = Vec::new();
     let mut next_interface: Option<Interface> = None;
 
-    let add_to_list = |all_interfaces: &mut Vec<Interface>, next_interface| {
+    let add_to_list = |all_interfaces: &mut Vec<Interface>, next_interface: Option<Interface>| {
         if let Some(interface) = next_interface {
+            debug!("  - Found sink: {:?}", interface);
             all_interfaces.push(interface);
         }
     };
 
+    debug!("Collecting current audio sinks:");
     for line in sinks_output.lines() {
         if line.contains("index") {
             // Next sink.
@@ -42,9 +46,9 @@ fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
             let index: i32 = re.replace(line, "$i").parse()?;
             next_interface = Some(Interface {
                 index: index,
-                name: String::new(),
                 active: active,
                 state: String::new(),
+                name: String::new(),
             });
         } else if line.contains("state:") {
             if let Some(interface) = next_interface {
@@ -72,6 +76,7 @@ fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
 pub fn get_active_interface(interfaces: &Vec<Interface>) -> Option<Interface> {
     for interface in interfaces {
         if interface.active {
+            debug!("Found active interface: {:?}", interface);
             return Some(interface.clone());
         }
     }
@@ -101,7 +106,10 @@ impl VolumeControl {
             ])
             .output()?;
         if !output.status.success() {
-            eprintln!("{}", str::from_utf8(&output.stderr).unwrap());
+            error!(
+                "Failed to change volume: {}",
+                str::from_utf8(&output.stderr).unwrap()
+            );
         }
 
         Ok(())
@@ -132,31 +140,33 @@ impl VolumeControl {
     pub fn cycle_through_interfaces(&mut self) -> Result<(), Box<dyn Error>> {
         self.interfaces = get_current_audio_outputs()?;
 
-        let active_interfaces: Vec<usize> = self
-            .interfaces
-            .iter()
-            .enumerate()
-            .filter(|(_, interface)| interface.active)
-            .map(|(idx, _)| idx)
-            .collect();
-
-        if active_interfaces.len() != 1 {
+        if self.interfaces.len() <= 1 {
             return Err(String::from("Not enough active interfaces.").into());
         }
 
-        let next_interface = (active_interfaces[0] + 1) % self.interfaces.len();
+        let current_index = match self.interfaces.iter().position(|i| i.active) {
+            Some(index) => index,
+            None => 0,
+        };
+        let next_interface_index = (current_index + 1) % self.interfaces.len();
+        debug!(
+            "Switching to the next interface: {} -> {}",
+            self.interfaces[current_index].index, self.interfaces[next_interface_index].index
+        );
 
+        let next_interface_index = self.interfaces[next_interface_index].index;
         process::Command::new("pactl")
-            .args(&["set-default-sink", &next_interface.to_string()])
+            .args(&["set-default-sink", &next_interface_index.to_string()])
             .output()?;
 
         let sink_inputs = list_sink_inputs()?;
         for sink in sink_inputs.iter() {
+            debug!("Moving sink input {:?} to new output.", sink);
             process::Command::new("pacmd")
                 .args(&[
                     "move-sink-input",
                     &sink.to_string(),
-                    &next_interface.to_string(),
+                    &next_interface_index.to_string(),
                 ])
                 .output()?;
         }
