@@ -27,7 +27,7 @@ impl DbusInterface {
         }
     }
 
-    pub fn show_volume_notification(&mut self) {
+    pub fn show_volume_notification(&mut self, always_play_sound: bool) {
         match VolumeInfo::get_volume() {
             Err(e) => error!("Failed to get volume status: {}", e),
             Ok(volume) => {
@@ -36,16 +36,17 @@ impl DbusInterface {
                     .unwrap_or_else(|e| eprintln!("Failed to notify: {}", e));
             }
         }
-        self.play_sound_if_not_used();
+        self.play_sound(always_play_sound);
     }
 
-    fn play_sound_if_not_used(&mut self) {
+    fn play_sound(&mut self, always_play_sound: bool) {
         match VolumeControl::new() {
             Ok(vol) => self.volume_control = vol,
             Err(e) => error!("Failed to get volume info: {}", e),
         }
         if let Some(active_interface) = &self.volume_control.active_interface {
-            self.sound_player.play_sound_if_not_used(&active_interface);
+            self.sound_player
+                .play_sound(&active_interface, always_play_sound);
         }
     }
 
@@ -53,7 +54,7 @@ impl DbusInterface {
         self.volume_control
             .change_volume(amount)
             .unwrap_or_else(|e| error!("Failed to change volume: {}", e));
-        self.show_volume_notification();
+        self.show_volume_notification(false);
         Ok(vec![m.msg.method_return()])
     }
 
@@ -61,7 +62,7 @@ impl DbusInterface {
         self.volume_control
             .toggle_mute()
             .unwrap_or_else(|e| error!("Failed to toggle mute: {}", e));
-        self.show_volume_notification();
+        self.show_volume_notification(false);
 
         Ok(vec![m.msg.method_return()])
     }
@@ -83,7 +84,7 @@ impl DbusInterface {
                 }
             }
         };
-        self.play_sound_if_not_used();
+        self.play_sound(false);
         Ok(vec![m.msg.method_return()])
     }
 }
@@ -103,6 +104,7 @@ pub fn run() {
     let interface_raise = Rc::clone(&interface);
     let interface_mute = Rc::clone(&interface);
     let interface_cycle = Rc::clone(&interface);
+    let interface_show = Rc::clone(&interface);
 
     let tree = f
         .tree(())
@@ -124,6 +126,11 @@ pub fn run() {
                     .add_m(f.method("CycleInputs", (), move |m| {
                         info!("Received: CycleInputs");
                         interface_cycle.borrow_mut().cycle_through_interfaces(m)
+                    }))
+                    .add_m(f.method("ShowVolume", (), move |m| {
+                        info!("Received: ShowVolume");
+                        interface_show.borrow_mut().show_volume_notification(true);
+                        Ok(vec![m.msg.method_return()])
                     })),
             ),
         )

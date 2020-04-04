@@ -18,7 +18,7 @@ fn setup_log() -> Result<(), Box<dyn Error>> {
     // fs::create_dir_all(log_file.parent().unwrap())?;
 
     CombinedLogger::init(vec![
-        TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed).unwrap(),
+        // TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed).unwrap(),
         WriteLogger::new(
             LevelFilter::Debug,
             Config::default(),

@@ -146,9 +146,12 @@ impl SoundPlayer {
         }
     }
 
-    pub fn play_sound_if_not_used(&mut self, interface: &Interface) {
-        debug!("Request to play sound. Interface state: {}", interface.state);
-        if interface.state != "RUNNING" {
+    pub fn play_sound(&mut self, interface: &Interface, always_play_sound: bool) {
+        debug!(
+            "Request to play sound. Interface state: {}",
+            interface.state
+        );
+        if always_play_sound || interface.state != "RUNNING" {
             debug!("Interface is NOT running. Playing a sound.");
             let index = interface.index.to_string();
             if let Ok(thread_running) = self.thread_running.lock() {
