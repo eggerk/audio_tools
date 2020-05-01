@@ -23,7 +23,7 @@ checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
 
 [[package]]
 name = "audio_tools"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dbus 0.8.1",
  "log",

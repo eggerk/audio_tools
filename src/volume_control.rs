@@ -51,13 +51,13 @@ fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
                 name: String::new(),
             });
         } else if line.contains("state:") {
-            if let Some(ref mut interface) = next_interface {
+            if let Some(interface) = &mut next_interface {
                 if let Some(state) = line.rsplit(' ').next() {
                     interface.state = state.to_string();
                 }
             }
         } else if line.contains("device.description") {
-            if let Some(ref mut interface) = next_interface {
+            if let Some(interface) = &mut next_interface {
                 let re = Regex::new(r#"^.*device.description = "(?P<n>.*)".*$"#)?;
                 interface.name = re.replace_all(line, "$n").to_string();
             }

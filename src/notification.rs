@@ -1,8 +1,6 @@
 use std::error::Error;
 use std::process;
 use std::str;
-use std::sync::{Arc, Mutex};
-use std::thread::{spawn, JoinHandle};
 
 use log::{debug, error, info};
 use notify_rust::{Notification, NotificationHandle};
@@ -90,7 +88,7 @@ impl VolumeNotification {
 
     pub fn notify(&mut self, volume_info: &VolumeInfo) -> Result<(), Box<dyn Error>> {
         debug!(
-            "Showing volumen notification ({}%, muted: {}).",
+            "Showing volume notification ({}%, muted: {}).",
             volume_info.volume, volume_info.muted
         );
         let (title, body) = VolumeNotification::build_volume_string(&volume_info);
@@ -134,15 +132,13 @@ impl SinkNotificaton {
 }
 
 pub struct SoundPlayer {
-    thread: Option<JoinHandle<()>>,
-    thread_running: Arc<Mutex<bool>>,
+    play_sound_process: Option<process::Child>,
 }
 
 impl SoundPlayer {
     pub fn new() -> Self {
         SoundPlayer {
-            thread: None,
-            thread_running: Arc::new(Mutex::new(false)),
+            play_sound_process: None,
         }
     }
 
@@ -154,34 +150,32 @@ impl SoundPlayer {
         if always_play_sound || interface.state != "RUNNING" {
             debug!("Interface is NOT running. Playing a sound.");
             let index = interface.index.to_string();
-            if let Ok(thread_running) = self.thread_running.lock() {
-                if *thread_running {
-                    debug!("A sound is already playing -- aborting.");
-                    return;
+            if let Some(play_sound_process) = &mut self.play_sound_process {
+                match play_sound_process.try_wait() {
+                    Ok(Some(_)) => self.play_sound_process = None,
+                    Ok(None) => {
+                        debug!(
+                            "Play sound process is still in progress. Not starting another one."
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Failed to wait for the play sound process: {}", e);
+                        return;
+                    }
                 }
             }
 
-            let thread_running_copy = self.thread_running.clone();
-            self.thread = Some(spawn(move || {
-                debug!("Playing sound now.");
-                if let Err(e) = process::Command::new("paplay")
-                    .args(&[
-                        "-d",
-                        &index,
-                        "/usr/share/sounds/freedesktop/stereo/message.oga",
-                    ])
-                    .output()
-                {
-                    error!("Failed to play sound: {}", e);
-                }
-
-                if let Ok(mut thread_running) = thread_running_copy.lock() {
-                    *thread_running = false;
-                }
-            }));
-
-            if let Ok(mut thread_running) = self.thread_running.lock() {
-                *thread_running = true;
+            match process::Command::new("paplay")
+                .args(&[
+                    "-d",
+                    &index,
+                    "/usr/share/sounds/freedesktop/stereo/message.oga",
+                ])
+                .spawn()
+            {
+                Ok(process) => self.play_sound_process = Some(process),
+                Err(e) => error!("Failed to start play sound process: {}", e),
             }
         }
     }
