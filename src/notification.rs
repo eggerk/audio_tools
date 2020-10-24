@@ -1,51 +1,50 @@
-use std::error::Error;
 use std::process;
 use std::str;
 
-use log::{debug, error, info};
-use notify_rust::{Notification, NotificationHandle};
+use failure::{bail, Error};
+use log::{debug, error};
+use notify_rust::Notification;
 
 use crate::volume::VolumeInfo;
 use crate::volume_control::Interface;
 
 struct NotificationWrapper {
-    notification_handle: Option<NotificationHandle>,
+    id: Option<u32>,
     default_summary: String,
 }
 
 impl NotificationWrapper {
-    fn new(default_summary: String) -> NotificationWrapper {
+    fn new(id: Option<u32>, default_summary: String) -> NotificationWrapper {
         NotificationWrapper {
-            notification_handle: None,
+            id: id,
             default_summary: default_summary,
         }
     }
 
-    fn notify(&mut self, summary: Option<&str>, body: &str) -> Result<(), Box<dyn Error>> {
-        if let None = self.notification_handle {
-            info!(
-                "Created notification \"{}\".",
-                match summary {
-                    Some(s) => s,
-                    None => "<no summary>",
-                }
-            );
-            let notification = Notification::new().icon("audio-headphones").show()?;
-            self.notification_handle = Some(notification);
-        }
+    fn notify(&mut self, summary: Option<&str>, body: &str) -> Result<(), Error> {
+        let mut notification = Notification::new().icon("audio-headphones").finalize();
 
-        if let Some(notification_handle) = &mut self.notification_handle {
-            let summary = match summary {
-                Some(s) => s,
-                None => &self.default_summary,
-            };
-            debug!("Showing notification \"{}\".", summary);
-            notification_handle.summary(summary);
-            notification_handle.body(&body);
-            notification_handle.update();
+        let summary = match summary {
+            Some(s) => s,
+            None => &self.default_summary,
+        };
+        debug!("Showing notification \"{}\".", summary);
+        let mut notification = notification.summary(summary).body(&body).finalize();
+        let notification = match self.id {
+            Some(id) => notification.id(id).finalize(),
+            None => notification,
+        };
+        match notification.show() {
+            Err(e) => bail!("{:?}", e),
+            Ok(handle) => {
+                self.id = Some(handle.id());
+                Ok(())
+            }
         }
+    }
 
-        Ok(())
+    fn get_id(&self) -> Option<u32> {
+        self.id
     }
 }
 
@@ -54,10 +53,14 @@ pub struct VolumeNotification {
 }
 
 impl VolumeNotification {
-    pub fn new() -> Self {
+    pub fn new(id: Option<u32>) -> Self {
         Self {
-            notification_handle: NotificationWrapper::new(String::from("Volume")),
+            notification_handle: NotificationWrapper::new(id, String::from("Volume")),
         }
+    }
+
+    pub fn get_id(&self) -> Option<u32> {
+        self.notification_handle.get_id()
     }
 
     fn build_volume_string(info: &VolumeInfo) -> (String, String) {
@@ -86,7 +89,7 @@ impl VolumeNotification {
         (title, body)
     }
 
-    pub fn notify(&mut self, volume_info: &VolumeInfo) -> Result<(), Box<dyn Error>> {
+    pub fn notify(&mut self, volume_info: &VolumeInfo) -> Result<(), Error> {
         debug!(
             "Showing volume notification ({}%, muted: {}).",
             volume_info.volume, volume_info.muted
@@ -102,18 +105,22 @@ pub struct SinkNotificaton {
 }
 
 impl SinkNotificaton {
-    pub fn new() -> Self {
+    pub fn new(id: Option<u32>) -> Self {
         Self {
-            notification_handle: NotificationWrapper::new(String::from("Audio Input")),
+            notification_handle: NotificationWrapper::new(id, String::from("Audio Input")),
         }
     }
 
-    pub fn notify_start(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn get_id(&self) -> Option<u32> {
+        self.notification_handle.get_id()
+    }
+
+    pub fn notify_start(&mut self) -> Result<(), Error> {
         debug!("Notifying about sink change start.");
         self.notification_handle.notify(None, "Changing input...")
     }
 
-    pub fn notify(&mut self, interfaces: &Vec<Interface>) -> Result<(), Box<dyn Error>> {
+    pub fn notify(&mut self, interfaces: &Vec<Interface>) -> Result<(), Error> {
         debug!("Showing sink notification.");
         let body = interfaces
             .iter()

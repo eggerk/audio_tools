@@ -1,8 +1,8 @@
 use regex::Regex;
-use std::error::Error;
 use std::process;
 use std::str;
 
+use failure::{bail, Error};
 use log::{debug, error};
 
 #[derive(Clone, Debug)]
@@ -18,7 +18,7 @@ pub struct VolumeControl {
     pub active_interface: Option<Interface>,
 }
 
-fn get_current_audio_outputs() -> Result<Vec<Interface>, Box<dyn Error>> {
+fn get_current_audio_outputs() -> Result<Vec<Interface>, Error> {
     let sinks_list = process::Command::new("pacmd")
         .args(&["list-sinks"])
         .output()?;
@@ -80,7 +80,7 @@ pub fn get_active_interface(interfaces: &Vec<Interface>) -> Option<Interface> {
 }
 
 impl VolumeControl {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Result<Self, Error> {
         let interfaces = get_current_audio_outputs()?;
         let active_interface = get_active_interface(&interfaces);
         Ok(Self {
@@ -89,7 +89,7 @@ impl VolumeControl {
         })
     }
 
-    pub fn change_volume(&self, amount: i32) -> Result<(), Box<dyn Error>> {
+    pub fn change_volume(&self, amount: i32) -> Result<(), Error> {
         let amount_absolute = amount.abs();
         let direction_sign = if amount >= 0 { '+' } else { '-' };
         let output = process::Command::new("amixer")
@@ -111,7 +111,7 @@ impl VolumeControl {
         Ok(())
     }
 
-    pub fn toggle_mute(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn toggle_mute(&mut self) -> Result<(), Error> {
         self.interfaces = get_current_audio_outputs()?;
 
         if let Some(active_interface) = &self.active_interface {
@@ -127,17 +127,17 @@ impl VolumeControl {
         Ok(())
     }
 
-    pub fn get_available_interfaces(&mut self) -> Result<&Vec<Interface>, Box<dyn Error>> {
+    pub fn get_available_interfaces(&mut self) -> Result<&Vec<Interface>, Error> {
         self.interfaces = get_current_audio_outputs()?;
         self.active_interface = get_active_interface(&self.interfaces);
         Ok(&self.interfaces)
     }
 
-    pub fn cycle_through_interfaces(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn cycle_through_interfaces(&mut self) -> Result<(), Error> {
         self.interfaces = get_current_audio_outputs()?;
 
         if self.interfaces.len() <= 1 {
-            return Err(String::from("Not enough active interfaces.").into());
+            bail!("Not enough active interfaces.");
         }
 
         let current_index = match self.interfaces.iter().position(|i| i.active) {
@@ -171,7 +171,7 @@ impl VolumeControl {
     }
 }
 
-fn list_sink_inputs() -> Result<Vec<i32>, Box<dyn Error>> {
+fn list_sink_inputs() -> Result<Vec<i32>, Error> {
     let output = process::Command::new("pacmd")
         .args(&["list-sink-inputs"])
         .output()?;
